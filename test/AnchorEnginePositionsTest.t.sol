@@ -125,7 +125,7 @@ contract AnchorEnginePositionsTest is AnchorTestFixture {
     {
         // Arrange - Act
         vm.startPrank(user);
-        anchorEngine.burn(user, USER_MINT_AMOUNT);
+        anchorEngine.repay(user, USER_MINT_AMOUNT);
         anchorEngine.withdraw(user, USER_SUBMIT_AMOUNT);
         vm.stopPrank();
 

@@ -11,13 +11,17 @@ contract DepositAndMint is Script {
     uint256 public constant ETH_DEPOSIT_AMOUNT = 2 ether;
     uint256 public constant MINT_AMOUNT = 2000e18;
 
+    address public ANCHOR_ENGINE_ADDR = 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0;
+
     function run() external {
         HelperConfig helperConfig = new HelperConfig();
 
         (, , uint256 deployerKey) = helperConfig.activeNetworkConfig();
 
-        address mostRecentlyDeployedAnchorEngine = DevOpsTools
-            .get_most_recent_deployment("AnchorEngine", block.chainid);
+        // address mostRecentlyDeployedAnchorEngine = DevOpsTools
+        //     .get_most_recent_deployment("AnchorEngine", block.chainid);
+
+        address mostRecentlyDeployedAnchorEngine = ANCHOR_ENGINE_ADDR;
 
         AnchorEngine anchorEngine = AnchorEngine(
             mostRecentlyDeployedAnchorEngine

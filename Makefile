@@ -29,7 +29,7 @@ snapshot :; forge snapshot
 
 format :; forge fmt
 
-anvil :; anvil -m 'test test test test test test test test test test test junk' --steps-tracing --block-time 1
+anvil :; anvil --accounts 15 --timestamp 300000 --host 0.0.0.0
 
 NETWORK_ARGS := --rpc-url http://localhost:8545 --private-key $(DEFAULT_ANVIL_KEY) --broadcast
 
@@ -49,3 +49,9 @@ update-oracle:
 
 deposit-n-mint:
 	@forge script script/DepositAndMint.s.sol $(NETWORK_ARGS)
+
+deposit-n-mint-multiple-users:
+	@forge script script/DepositAndMintMultipleUsers.s.sol $(NETWORK_ARGS)
+
+register-providers:
+	@forge script script/RegisterRedemptionProviders.s.sol $(NETWORK_ARGS)

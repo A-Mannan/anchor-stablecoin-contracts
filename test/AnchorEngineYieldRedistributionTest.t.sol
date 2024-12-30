@@ -12,6 +12,15 @@ import {DeployAnchor} from "../script/DeployAnchor.s.sol";
 import {AnchorTestFixture} from "./AnchorTestFixture.t.sol";
 
 contract AnchorEngineYieldRedistributionTest is AnchorTestFixture {
+    address public buyer = makeAddr("buyer");
+
+    function setUp() public override {
+        super.setUp();
+        if (block.chainid == 31337) {
+            vm.deal(buyer, STARTING_USER_BALANCE);
+        }
+    }
+
     modifier WhenUserDepositedCollateralAndMintedAnchorUSD() {
         vm.prank(user);
         anchorEngine.depositEtherToMint{value: USER_SUBMIT_AMOUNT}(
@@ -21,12 +30,7 @@ contract AnchorEngineYieldRedistributionTest is AnchorTestFixture {
         _;
     }
 
-    function test_UserCanBuyStEthIncomeAndTriggerRebaseRedemption()
-        public
-        WhenUserDepositedCollateralAndMintedAnchorUSD
-    {
-        // Arrange
-        uint256 otherDepositersMintAmount = 1e18;
+    modifier WhenMultipleUsersDepositedCollateralAndMintedAnchorUSD() {
         for (
             uint160 depositerIndex = 1;
             depositerIndex < 10;
@@ -35,25 +39,56 @@ contract AnchorEngineYieldRedistributionTest is AnchorTestFixture {
             hoax(address(depositerIndex), STARTING_USER_BALANCE);
             anchorEngine.depositEtherToMint{value: USER_SUBMIT_AMOUNT}(
                 address(depositerIndex),
-                otherDepositersMintAmount
+                USER_MINT_AMOUNT
             );
         }
+        _;
+    }
 
-        uint256 initialUserStEthEBalance = stEth.balanceOf(user);
+    modifier WhenStETHRebasesRewards() {
+        // vm.deal(address(stEth), 10 ether);
+        vm.prank(stEth.owner());
+        stEth.accumulateRewards(10 ether);
+        _;
+    }
+
+    function _fundWithAnchorUsd(address _user, uint256 _amount) private {
+        vm.prank(address(anchorEngine));
+        anchorUSD.mint(_user, _amount);
+    }
+
+    function test_UserCanBuyStEthIncomeAndTriggerRebaseRedemption()
+        public
+        WhenMultipleUsersDepositedCollateralAndMintedAnchorUSD
+        WhenStETHRebasesRewards
+    {
+        // Arrange
+        uint256 initialBuyerStEthEBalance = stEth.balanceOf(buyer);
+        uint256 auctionYieldAmount = stEth.balanceOf(address(anchorEngine)) -
+            anchorEngine.totalDepositedEther();
 
         // Act
+        vm.warp(2 days + 13 hours);
 
-        vm.warp(10 days);
+        uint256 dutchAuctionDiscountPrice = anchorEngine
+            .getDutchAuctionDiscountPrice();
+        uint256 auctionPaymentAmount = (auctionYieldAmount *
+            anchorEngine.fetchEthPriceInUsd() *
+            dutchAuctionDiscountPrice) /
+            10_000 /
+            1e18;
 
-        vm.startPrank(user);
+        _fundWithAnchorUsd(buyer, auctionPaymentAmount);
 
-        anchorUSD.approve(address(anchorEngine), PAYOUT_AMOUNT);
-        anchorEngine.excessIncomeDistribution(PAYOUT_AMOUNT); // Trigger rebase
+        vm.startPrank(buyer);
+
+        anchorUSD.approve(address(anchorEngine), auctionPaymentAmount);
+        anchorEngine.harvestAndAuctionYield(auctionYieldAmount);
 
         vm.stopPrank();
-        // Assert
 
-        assertGt(stEth.balanceOf(user), initialUserStEthEBalance);
+        // Assert
+        assertGt(stEth.balanceOf(buyer), initialBuyerStEthEBalance);
         for (
             uint160 depositerIndex = 1;
             depositerIndex < 10;
@@ -61,7 +96,7 @@ contract AnchorEngineYieldRedistributionTest is AnchorTestFixture {
         ) {
             assertGt(
                 anchorUSD.balanceOf(address(depositerIndex)),
-                otherDepositersMintAmount
+                USER_MINT_AMOUNT
             );
         }
     }

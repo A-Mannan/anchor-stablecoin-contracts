@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.20;
 
@@ -19,4 +19,6 @@ interface IStETH {
         address _recipient,
         uint256 _amount
     ) external returns (bool);
+
+    function approve(address _spender, uint256 _amount) external returns (bool);
 }

@@ -2,8 +2,7 @@
 
 pragma solidity ^0.8.19;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title Interest-bearing ERC20-like token for Lybra protocol.
@@ -36,7 +35,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * pooled Ether increases, no `Transfer` events are generated: doing so would require
  * emitting an event for each token holder and thus running an unbounded loop.
  */
-contract MockStETH is IERC20, Ownable {
+contract MockStETH is IERC20 {
     uint256 private totalShares;
 
     uint256 totalEther;
@@ -87,7 +86,7 @@ contract MockStETH is IERC20, Ownable {
         uint256 sharesAmount
     );
 
-    constructor() Ownable(msg.sender) {
+    constructor() {
         _mintShares(msg.sender, 10000 * 1e18);
         totalEther = 10000 * 1e18;
         // updateTime = block.timestamp;
@@ -102,15 +101,20 @@ contract MockStETH is IERC20, Ownable {
         return sharesAmount;
     }
 
-    function accumulateRewards(uint256 rewards) external onlyOwner {
-        totalEther += rewards;
-    }
+    // function claimTestStETH() external {
+    //     _mintShares(msg.sender, 100 * 1e18);
+    // }
 
     /**
      * @dev mock stETH are expanding at a ratio of 1% a day
      */
     function _getTotalPooledEth() internal view returns (uint256) {
-        return totalEther;
+        return address(this).balance;
+        // return
+        //     totalEther +
+        //     (totalEther * (block.timestamp - updateTime)) /
+        //     365 /
+        //     20 days;
     }
 
     /**

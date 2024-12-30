@@ -42,7 +42,9 @@ contract MockStETHTest is Test {
 
         uint256 initialUserBalance = mockStEth.balanceOf(user);
 
-        vm.warp(1 days);
+        vm.prank(mockStEth.owner());
+        mockStEth.accumulateRewards(10 ether);
+        // vm.deal(address(mockStEth), 10 ether);
 
         uint256 endingUserBalance = mockStEth.balanceOf(user);
 

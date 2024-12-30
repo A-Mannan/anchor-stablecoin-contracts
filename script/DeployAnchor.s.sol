@@ -7,6 +7,8 @@ import {AnchorUSD} from "../src/AnchorUSD.sol";
 import {AnchorEngine} from "../src/AnchorEngine.sol";
 
 contract DeployAnchor is Script {
+    uint256 public constant MIN_COLL_RATIO = 120e18;
+
     function getAnchorEngineAddress(
         address deployer,
         uint256 initialNonce
@@ -31,7 +33,8 @@ contract DeployAnchor is Script {
             new AnchorEngine(
                 stETH,
                 ethUsdPriceFeed,
-                getAnchorUSDAddress(deployer, initialNonce)
+                getAnchorUSDAddress(deployer, initialNonce),
+                MIN_COLL_RATIO
             );
     }
 
@@ -39,7 +42,11 @@ contract DeployAnchor is Script {
         address deployer,
         uint256 initialNonce
     ) public returns (AnchorUSD) {
-        return new AnchorUSD(getAnchorEngineAddress(deployer, initialNonce), msg.sender);
+        return
+            new AnchorUSD(
+                getAnchorEngineAddress(deployer, initialNonce),
+                msg.sender
+            );
     }
 
     function run() external returns (address, address, address, address) {

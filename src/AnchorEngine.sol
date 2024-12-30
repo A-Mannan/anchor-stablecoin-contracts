@@ -52,20 +52,27 @@ contract AnchorEngine is Governable {
                             STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
 
+    // Currently, the official rebase time for Lido is between 12PM UTC.
+    uint256 public lidoRebaseTime = 12 hours;
+
     uint256 public totalDepositedEther;
     uint256 public totalAnchorUSDCirculation;
-    uint256 public lastReportTime;
+    // uint256 public lastReportTime;
     uint256 year = 365 days; // secs in a year
 
-    uint256 public mintFeeApy = 150;
-    uint256 public safeCollateralRatio = 160 * 1e18;
-    uint256 public immutable badCollateralRatio = 150 * 1e18;
+    // uint256 public mintFeeApy = 150;
+    // uint256 public safeCollateralRatio = 160 * 1e18;
+    // uint256 public immutable badCollateralRatio = 150 * 1e18;
+    uint256 public minCollateralRatio;
+
     // uint256 public redemptionFee = 50;
     uint8 public keeperRate = 1;
+    // Fee Share percentage in basis points
+    uint256 public feeShareBps = 500; // 5%
 
     mapping(address user => UserPosition position) public userPositions;
 
-    uint256 public feeStored;
+    // uint256 public feeStored;
 
     IStETH immutable stETH;
     AggregatorV3Interface immutable priceFeed;
@@ -78,23 +85,23 @@ contract AnchorEngine is Governable {
     EnumerableSet.AddressSet private redemptionProviders;
     EnumerableSet.AddressSet private borrowers;
 
-    uint256 public constant MAX_MINT_FEE_APY = 150; //1.5%
+    // uint256 public constant MAX_MINT_FEE_APY = 150; //1.5%
+    uint256 public constant MAX_FEE_SHARE_BPS = 3000; //30%
 
-    uint256 public constant SAFE_COLL_RATIO_FLOOR = 160e18; //160%
+    uint256 public constant MIN_COLL_RATIO_FLOOR = 120e18; //160%
 
     uint256 public constant MAX_KEEPERS_RATE = 5; //5%
 
     uint256 public constant MAX_REDEMPTION_FEE_RATE = 500; //5%
 
     uint256 public constant INITIAL_MIN_DEPOSIT_AMOUNT = 1 ether;
-    
 
     /*//////////////////////////////////////////////////////////////
                                  EVENTS
     //////////////////////////////////////////////////////////////*/
 
-    event BorrowApyChanged(uint256 newApy);
-    event SafeCollateralRatioChanged(uint256 newRatio);
+    event FeeShareChanged(uint256 newFeeShareBps);
+    event MinCollateralRatioChanged(uint256 newRatio);
     event KeeperRateChanged(uint256 newSlippage);
     event RedemptionFeeChanged(uint256 newSlippage);
     event DepositEther(
@@ -128,15 +135,14 @@ contract AnchorEngine is Governable {
         uint256 anchorUSDAmount,
         uint256 LiquidateEtherAmount,
         uint256 keeperReward,
-        bool superLiquidation,
         uint256 timestamp
     );
-    event LSDistribution(
-        uint256 stETHAdded,
-        uint256 payoutAnchorUSD,
-        uint256 timestamp
+    event RedemptionProviderRegistered(
+        address indexed user,
+        uint256 feeRate,
+        uint256 amount
     );
-    event RedemptionProvider(address user, bool status);
+    event RedemptionProviderRemoved(address indexed user);
     event RedeemedCollateral(
         address indexed caller,
         address indexed provider,
@@ -144,7 +150,24 @@ contract AnchorEngine is Governable {
         uint256 etherAmount,
         uint256 timestamp
     );
+    event LSDValueCaptured(
+        uint256 stETHAdded,
+        uint256 payoutEUSD,
+        uint256 discountRate,
+        uint256 timestamp
+    );
+    event FeeDistribution(
+        address indexed feeAddress,
+        uint256 feeAmount,
+        uint256 timestamp
+    );
 
+    event BatchRedeemedCollateral(
+        address indexed caller,
+        uint256 anchorUSDAmount,
+        uint256 etherAmount,
+        uint256 timestamp
+    );
 
     /*//////////////////////////////////////////////////////////////
                                ERRORS
@@ -152,7 +175,7 @@ contract AnchorEngine is Governable {
 
     // setters
     error AnchorEngine__BorrowApyExceedsLimit();
-    error AnchorEngine__SafeCollateralRatioTooLow();
+    error AnchorEngine__MinCollateralRatioTooLow();
     error AnchorEngine__MaxKeeperRateExceeded();
     error AnchorEngine__MaxRedemptionFeeExceeded();
 
@@ -186,6 +209,13 @@ contract AnchorEngine is Governable {
     error AnchorEngine__TransferFailed();
     error AnchorEngine__NoRedemptionProviders();
 
+    error AnchorEngine__CollateralRatioAboveMinCollateralRatio();
+    error AnchorEngine__ExceedsCollateralLimit();
+    error AnchorEngine__InsufficientAllowance();
+    error AnchorEngine__NoExcessIncome();
+
+    error AnchorEngine__SlippageExceeded();
+
     /*//////////////////////////////////////////////////////////////
                                MODIFIERS
     //////////////////////////////////////////////////////////////*/
@@ -211,32 +241,36 @@ contract AnchorEngine is Governable {
     constructor(
         address _stETHAddress,
         address _priceFeedAddress,
-        address _anchorUSDAddress
+        address _anchorUSDAddress,
+        uint256 _minCollateralRatio
     ) {
         governance = msg.sender;
         stETH = IStETH(_stETHAddress);
         priceFeed = AggregatorV3Interface(_priceFeedAddress);
         anchorUSD = IAnchorUSD(_anchorUSDAddress);
+        minCollateralRatio = _minCollateralRatio;
     }
 
-    function setBorrowApy(uint256 newApy) external onlyGovernance {
-        if (newApy > MAX_MINT_FEE_APY) {
+    // Governance Ops
+
+    function setFeeShare(uint256 newFeeShareBps) external onlyGovernance {
+        if (newFeeShareBps > MAX_FEE_SHARE_BPS) {
             revert AnchorEngine__BorrowApyExceedsLimit();
         }
-        _saveReport();
-        mintFeeApy = newApy;
-        emit BorrowApyChanged(newApy);
+        // _saveReport();
+        feeShareBps = newFeeShareBps;
+        emit FeeShareChanged(newFeeShareBps);
     }
 
     /**
-     * @notice  safeCollateralRatio can be decided by DAO,starts at 160%
+     * @notice  minCollateralRatio can be decided by DAO,starts at 160%
      */
-    function setSafeCollateralRatio(uint256 newRatio) external onlyGovernance {
-        if (newRatio < SAFE_COLL_RATIO_FLOOR) {
-            revert AnchorEngine__SafeCollateralRatioTooLow();
+    function setMinCollateralRatio(uint256 newRatio) external onlyGovernance {
+        if (newRatio < MIN_COLL_RATIO_FLOOR) {
+            revert AnchorEngine__MinCollateralRatioTooLow();
         }
-        safeCollateralRatio = newRatio;
-        emit SafeCollateralRatioChanged(newRatio);
+        minCollateralRatio = newRatio;
+        emit MinCollateralRatioChanged(newRatio);
     }
 
     /**
@@ -249,6 +283,16 @@ contract AnchorEngine is Governable {
         keeperRate = newRate;
         emit KeeperRateChanged(newRate);
     }
+
+    /**
+     * @notice Sets the rebase time for Lido based on the actual situation.
+     * This function can only be called by an address with the ADMIN role.
+     */
+    function setLidoRebaseTime(uint256 _time) external onlyGovernance {
+        lidoRebaseTime = _time;
+    }
+
+    // User Ops
 
     /**
      * @notice User chooses to become a Redemption Provider
@@ -268,16 +312,20 @@ contract AnchorEngine is Governable {
             feeRate: _feeRate,
             amount: _amount
         });
-        emit RedemptionProvider(msg.sender, true);
+        emit RedemptionProviderRegistered(msg.sender, _feeRate, _amount);
     }
 
     /**
      * @notice User chooses to stop being a Redemption Provider
      */
     function removeRedemptionProvider() external {
-        redemptionProviders.remove(msg.sender);
-        delete redemptionOffers[msg.sender];
-        emit RedemptionProvider(msg.sender, false);
+        _removeRedemptionProvider(msg.sender);
+    }
+
+    function _removeRedemptionProvider(address _provider) internal {
+        redemptionProviders.remove(_provider);
+        delete redemptionOffers[_provider];
+        emit RedemptionProviderRemoved(_provider);
     }
 
     // --- Redemption Provider EnumerableSet getters ---
@@ -453,128 +501,67 @@ contract AnchorEngine is Governable {
     }
 
     /**
-     * @notice Burn the amount of anchorUSD and payback the amount of minted anchorUSD
-     * Emits a `Burn` event.
+     * @notice Repay the amount of anchorUSD and payback the amount of minted anchorUSD
+     * Emits a `Repay` event.
      * Requirements:
      * - `onBehalfOf` cannot be the zero address.
      * - `amount` Must be higher than 0.
      * @dev Calling the internal`_repay`function.
      */
-    function burn(
+    function repay(
         address onBehalfOf,
         uint256 amount
     ) external nonZeroAddress(onBehalfOf) nonZeroAmount(amount) {
         _repay(msg.sender, onBehalfOf, amount);
     }
 
-    /**
-     * @notice When overallCollateralRatio is above 150%, Keeper liquidates borrowers whose collateral rate is below badCollateralRatio, using anchorUSD provided by Liquidation Provider.
-     *
-     * Requirements:
-     * - onBehalfOf Collateral Rate should be below badCollateralRatio
-     * - etherAmount should be less than 50% of collateral
-     * - provider should authorize Anchor to utilize anchorUSD
-     * @dev After liquidation, borrower's debt is reduced by etherAmount * etherPrice, collateral is reduced by the etherAmount corresponding to 110% of the value. Keeper gets keeperRate / 110 of Liquidation Reward and Liquidator gets the remaining stETH.
-     */
-    function liquidate(
+    function liquidatePosition(
         address provider,
         address onBehalfOf,
-        uint256 etherAmount
+        uint256 debtToOffset
     ) external {
         uint256 etherPrice = fetchEthPriceInUsd();
-        uint256 onBehalfOfCollateralRatio = (userPositions[onBehalfOf]
-            .collateral *
-            etherPrice *
-            100) / userPositions[onBehalfOf].debt;
-        require(
-            onBehalfOfCollateralRatio < badCollateralRatio,
-            "Borrowers collateral rate should below badCollateralRatio"
+
+        uint256 onBehalfOfCollateralRatio = _calculateCollateralRatio(
+            userPositions[onBehalfOf].collateral,
+            etherPrice,
+            userPositions[onBehalfOf].debt
         );
 
-        require(
-            etherAmount * 2 <= userPositions[onBehalfOf].collateral,
-            "a max of 50% collateral can be liquidated"
-        );
-        uint256 anchorUSDAmount = (etherAmount * etherPrice) / 1e18;
-        require(
-            anchorUSD.allowance(provider, address(this)) >= anchorUSDAmount,
-            "provider should authorize to provide liquidation anchorUSD"
-        );
-
-        _repay(provider, onBehalfOf, anchorUSDAmount);
-
-        uint256 reducedEther = (etherAmount * 11) / 10;
-        totalDepositedEther -= reducedEther;
-        userPositions[onBehalfOf].collateral -= reducedEther;
-        uint256 reward2keeper;
-        if (provider == msg.sender) {
-            stETH.transfer(msg.sender, reducedEther);
-        } else {
-            reward2keeper = (reducedEther * keeperRate) / 110;
-            stETH.transfer(provider, reducedEther - reward2keeper);
-            stETH.transfer(msg.sender, reward2keeper);
+        if (onBehalfOfCollateralRatio >= minCollateralRatio) {
+            revert AnchorEngine__CollateralRatioAboveMinCollateralRatio();
         }
-        emit LiquidationRecord(
-            provider,
-            msg.sender,
-            onBehalfOf,
-            anchorUSDAmount,
-            reducedEther,
-            reward2keeper,
-            false,
-            block.timestamp
-        );
-    }
 
-    /**
-     * @notice When overallCollateralRatio is below badCollateralRatio, borrowers with collateralRatio below 125% could be fully liquidated.
-     * Emits a `LiquidationRecord` event.
-     *
-     * Requirements:
-     * - Current overallCollateralRatio should be below badCollateralRatio
-     * - `onBehalfOf`collateralRatio should be below 125%
-     * @dev After Liquidation, borrower's debt is reduced by etherAmount * etherPrice, deposit is reduced by etherAmount * borrower's collateralRatio. Keeper gets a liquidation reward of `keeperRate / borrower's collateralRatio
-     */
-    function superLiquidation(
-        address provider,
-        address onBehalfOf,
-        uint256 etherAmount
-    ) external {
-        uint256 etherPrice = fetchEthPriceInUsd();
-        require(
-            (totalDepositedEther * etherPrice * 100) /
-                totalAnchorUSDCirculation <
-                badCollateralRatio,
-            "overallCollateralRatio should below 150%"
-        );
-        uint256 onBehalfOfCollateralRatio = (userPositions[onBehalfOf]
-            .collateral *
-            etherPrice *
-            100) / userPositions[onBehalfOf].debt;
-        require(
-            onBehalfOfCollateralRatio < 125 * 1e18,
-            "borrowers collateralRatio should below 125%"
-        );
-        require(
-            etherAmount <= userPositions[onBehalfOf].collateral,
-            "total of collateral can be liquidated at most"
-        );
-        uint256 anchorUSDAmount = (etherAmount * etherPrice) / 1e18;
+        uint256 anchorUSDAmount = userPositions[onBehalfOf].debt < debtToOffset
+            ? userPositions[onBehalfOf].debt
+            : debtToOffset;
+
+        // Calculate required collateral (etherAmount) to offset the given debt amount
+        uint256 etherAmount = (anchorUSDAmount * 1e18) / etherPrice;
+
+        // Apply discount if the borrower's collateral ratio is >= 100%
         if (onBehalfOfCollateralRatio >= 1e20) {
-            anchorUSDAmount =
-                (anchorUSDAmount * 1e20) /
-                onBehalfOfCollateralRatio;
+            etherAmount = (etherAmount * onBehalfOfCollateralRatio) / 1e20;
         }
-        require(
-            anchorUSD.allowance(provider, address(this)) >= anchorUSDAmount,
-            "provider should authorize to provide liquidation anchorUSD"
-        );
 
+        if (etherAmount > userPositions[onBehalfOf].collateral) {
+            revert AnchorEngine__ExceedsCollateralLimit();
+        }
+
+        if (anchorUSD.allowance(provider, address(this)) < anchorUSDAmount) {
+            revert AnchorEngine__InsufficientAllowance();
+        }
+
+        // Repay the specified debt amount using AnchorUSD
         _repay(provider, onBehalfOf, anchorUSDAmount);
 
+        // Update the borrower's collateral and total deposited ether
         totalDepositedEther -= etherAmount;
         userPositions[onBehalfOf].collateral -= etherAmount;
+
         uint256 reward2keeper;
+
+        // Calculate keeper reward (if applicable)
         if (
             msg.sender != provider &&
             onBehalfOfCollateralRatio >= 1e20 + keeperRate * 1e18
@@ -584,8 +571,11 @@ contract AnchorEngine is Governable {
                 onBehalfOfCollateralRatio;
             stETH.transfer(msg.sender, reward2keeper);
         }
+
+        // Transfer the remaining collateral to the provider
         stETH.transfer(provider, etherAmount - reward2keeper);
 
+        // Emit the liquidation event
         emit LiquidationRecord(
             provider,
             msg.sender,
@@ -593,81 +583,104 @@ contract AnchorEngine is Governable {
             anchorUSDAmount,
             etherAmount,
             reward2keeper,
-            true,
+            block.timestamp
+        );
+    }
+
+    function getYieldToHarvest() public view returns (uint256) {
+        return stETH.balanceOf(address(this)) - totalDepositedEther;
+    }
+
+    // Function for auctioning excess yield with fee deduction
+    function harvestAndAuctionYield(uint256 stETHAmount) external {
+        // Calculate the excess stETH in the contract
+        uint256 excessStETH = getYieldToHarvest();
+
+        // Validate input and state
+        if (excessStETH == 0 || stETHAmount == 0) {
+            revert AnchorEngine__NoExcessIncome();
+        }
+
+        // Determine the actual amount of stETH to process
+        uint256 yieldToAuction = stETHAmount > excessStETH
+            ? excessStETH
+            : stETHAmount;
+
+        // Calculate the payment in anchorUSD using Dutch Auction discount
+        uint256 dutchAuctionDiscountPrice = getDutchAuctionDiscountPrice();
+        uint256 auctionPaymentAmount = (yieldToAuction *
+            fetchEthPriceInUsd() *
+            dutchAuctionDiscountPrice) /
+            10_000 /
+            1e18;
+
+        // Calculate the fee to be deducted based on the fee percentage
+        uint256 feeAmount = (auctionPaymentAmount * feeShareBps) / 10_000;
+
+        // The amount to be distributed (after deducting fee)
+        uint256 redistributionAmount = auctionPaymentAmount - feeAmount;
+
+        // Handle the fee transfer
+        bool success = anchorUSD.transferFrom(
+            msg.sender,
+            governance,
+            feeAmount
+        );
+        if (!success) revert AnchorEngine__TransferFailed();
+
+        // Handle the redistribution of the remaining amount (after fee deduction)
+        uint256 sharesAmount = anchorUSD.getSharesByMintedAnchorUSD(
+            redistributionAmount
+        );
+        anchorUSD.burnShares(msg.sender, sharesAmount);
+
+        // Update state and transfer stETH to the user
+        // lastReportTime = block.timestamp;
+        stETH.transfer(msg.sender, yieldToAuction);
+
+        emit FeeDistribution(governance, feeAmount, block.timestamp);
+
+        // Emit event for yield distribution
+        emit LSDValueCaptured(
+            yieldToAuction,
+            auctionPaymentAmount,
+            dutchAuctionDiscountPrice,
             block.timestamp
         );
     }
 
     /**
-     * @notice When stETH balance increases through LSD or other reasons, the excess income is sold for anchorUSD, allocated to anchorUSD holders through rebase mechanism.
-     * Emits a `LSDistribution` event.
-     *
-     * *Requirements:
-     * - stETH balance in the contract cannot be less than totalDepositedEther after exchange.
-     * @dev Income is used to cover accumulated Service Fee first.
+     * @notice Reduces the discount for the issuance of additional tokens based on the rebase time using the Dutch auction method.
+     * The specific rule is that the discount rate increases by 1% every 30 minutes after the rebase occurs.
      */
-    function excessIncomeDistribution(uint256 payAmountInAnchorUSD) external {
-        uint256 payoutEther = (payAmountInAnchorUSD * 1e18) /
-            fetchEthPriceInUsd();
-        require(
-            payoutEther <=
-                stETH.balanceOf(address(this)) - totalDepositedEther &&
-                payoutEther > 0,
-            "Only LSD excess income can be exchanged"
-        );
-
-        uint256 income = feeStored + _newFee();
-
-        if (payAmountInAnchorUSD > income) {
-            bool success = anchorUSD.transferFrom(
-                msg.sender,
-                governance,
-                income
-            );
-            require(success, "TF");
-
-            uint256 sharesAmount = anchorUSD.getSharesByMintedAnchorUSD(
-                payAmountInAnchorUSD - income
-            );
-
-            anchorUSD.burnShares(msg.sender, sharesAmount);
-            feeStored = 0;
-        } else {
-            bool success = anchorUSD.transferFrom(
-                msg.sender,
-                governance,
-                payAmountInAnchorUSD
-            );
-            require(success, "TF");
-
-            feeStored = income - payAmountInAnchorUSD;
-        }
-
-        lastReportTime = block.timestamp;
-        stETH.transfer(msg.sender, payoutEther);
-
-        emit LSDistribution(payoutEther, payAmountInAnchorUSD, block.timestamp);
+    function getDutchAuctionDiscountPrice() public view returns (uint256) {
+        uint256 time = (block.timestamp - lidoRebaseTime) % 1 days;
+        if (time < 30 minutes) return 10_000;
+        return 10_000 - (time / 30 minutes - 1) * 100;
     }
 
     /**
-     * @notice Choose a Redemption Provider, Rigid Redeem `anchorUSDAmount` of anchorUSD and get 1:1 value of stETH
-     * Emits a `RedeemedCollateral` event.
-     *
-     * *Requirements:
-     * - `provider` must be a Redemption Provider
-     * - `provider`debt must equal to or above`anchorUSDAmount`
-     * @dev Service Fee for redemption `redemptionFee` is set to 0.5% by default, can be revised by DAO.
+     * @notice Internal function to handle the redemption logic.
+     * @dev Centralizes the redemption process for single and batch operations.
+     * @param provider The address of the redemption provider.
+     * @param anchorUSDAmount The amount of AnchorUSD to redeem.
+     * @param etherPrice The current ETH price in USD (pre-fetched for efficiency in batch operations).
+     * @param minEtherAmount The minimum acceptable amount of stETH to redeem (slippage protection).
+     * @return etherAmount The amount of stETH transferred to the redeemer.
      */
-    function redeemCollateral(
+    function _processRedemption(
         address provider,
-        uint256 anchorUSDAmount
-    ) public {
+        uint256 anchorUSDAmount,
+        uint256 etherPrice,
+        uint256 minEtherAmount
+    ) internal returns (uint256 etherAmount) {
         if (!isRedemptionProvider(provider))
             revert AnchorEngine__NotRedemptionProvider();
 
-        if (redemptionOffers[provider].amount < anchorUSDAmount)
+        uint256 providerOfferAmount = redemptionOffers[provider].amount;
+        if (providerOfferAmount < anchorUSDAmount)
             revert AnchorEngine__AmountExceedsOffer();
-        uint256 etherPrice = fetchEthPriceInUsd();
+
         uint256 providerCollateralRatio = _calculateCollateralRatio(
             userPositions[provider].collateral,
             etherPrice,
@@ -677,19 +690,32 @@ contract AnchorEngine is Governable {
         if (providerCollateralRatio <= 100 * 1e18)
             revert AnchorEngine__ProviderCollateralRatioTooLow();
 
-        _repay(msg.sender, provider, anchorUSDAmount);
-        redemptionOffers[provider].amount -= anchorUSDAmount;
+        // Update provider offer amount and user positions in memory first
+        redemptionOffers[provider].amount =
+            providerOfferAmount -
+            anchorUSDAmount;
 
-        if (redemptionOffers[provider].amount == 0)
-            redemptionProviders.remove(provider);
+        uint256 feeRate = redemptionOffers[provider].feeRate;
+        etherAmount =
+            (anchorUSDAmount * (100_00 - feeRate) * 1e18) /
+            (etherPrice * 100_00);
 
-        uint256 etherAmount = (((anchorUSDAmount * 1e18) / etherPrice) *
-            (100_00 - redemptionOffers[provider].feeRate)) / 100_00;
+        // Slippage check
+        if (etherAmount < minEtherAmount)
+            revert AnchorEngine__SlippageExceeded();
 
-        userPositions[provider].collateral -= etherAmount;
+        uint256 newCollateral = userPositions[provider].collateral -
+            etherAmount;
+        userPositions[provider].collateral = newCollateral;
+
+        if (redemptionOffers[provider].amount == 0) {
+            _removeRedemptionProvider(provider);
+        }
+
         totalDepositedEther -= etherAmount;
 
-        stETH.transfer(msg.sender, etherAmount);
+        // Perform repayment
+        _repay(msg.sender, provider, anchorUSDAmount);
 
         emit RedeemedCollateral(
             msg.sender,
@@ -698,49 +724,95 @@ contract AnchorEngine is Governable {
             etherAmount,
             block.timestamp
         );
+
+        return etherAmount;
+    }
+
+    /**
+     * @notice Redeems a specified amount of AnchorUSD from a single redemption provider.
+     * Emits a `RedeemedCollateral` event.
+     * @param provider The address of the redemption provider.
+     * @param anchorUSDAmount The amount of AnchorUSD to redeem.
+     * @param minEtherAmount The minimum acceptable amount of stETH to redeem (slippage protection).
+     */
+    function redeemCollateral(
+        address provider,
+        uint256 anchorUSDAmount,
+        uint256 minEtherAmount
+    ) public {
+        uint256 etherPrice = fetchEthPriceInUsd();
+        uint256 etherAmount = _processRedemption(
+            provider,
+            anchorUSDAmount,
+            etherPrice,
+            minEtherAmount
+        );
+
+        stETH.transfer(msg.sender, etherAmount);
     }
 
     /**
      * @notice Redeems a specified amount of AnchorUSD from multiple redemption providers.
-     * @dev Iterates through the list of providers and redeems the specified amount of AnchorUSD.
-     *      Only eligible providers (those registered and with a healthy collateral ratio) are considered.
-     *      The function does not revert if the full amount cannot be redeemed; it processes as much as possible.
-     * @param providers An array of addresses of redemption providers to redeem from, sorted by lowest fee first.
-     * @param amount The total amount of AnchorUSD to be redeemed.
+     * Emits a `BatchRedeemedCollateral` event.
+     * @param providers An array of redemption providers.
+     * @param amount The total amount of AnchorUSD to redeem.
+     * @param minEtherAmount The minimum acceptable total amount of stETH to redeem (slippage protection).
      */
     function batchRedeemCollateral(
         address[] calldata providers,
-        uint256 amount
+        uint256 amount,
+        uint256 minEtherAmount
     ) external {
         uint256 remainingAmount = amount;
-        for (
-            uint256 providerIdx = 0;
-            providerIdx < providers.length && remainingAmount > 0;
-            providerIdx++
-        ) {
-            uint256 providerCollRatio = _calculateCollateralRatio(
-                userPositions[providers[providerIdx]].collateral,
-                fetchEthPriceInUsd(),
-                userPositions[providers[providerIdx]].debt
-            );
-            if (
-                !isRedemptionProvider(providers[providerIdx]) ||
-                providerCollRatio <= (100 * 1e18)
-            ) continue;
+        uint256 totalEtherRedeemed = 0;
+        uint256 etherPrice = fetchEthPriceInUsd();
 
-            uint256 providerAmount = redemptionOffers[providers[providerIdx]]
-                .amount;
-            uint256 redeemableAmount = remainingAmount < providerAmount
+        for (uint256 i = 0; i < providers.length && remainingAmount > 0; i++) {
+            address provider = providers[i];
+
+            // Fetch provider offer and calculate redeemable amount
+            uint256 providerOfferAmount = redemptionOffers[provider].amount;
+            uint256 redeemableAmount = remainingAmount < providerOfferAmount
                 ? remainingAmount
-                : providerAmount;
-            redeemCollateral(providers[providerIdx], redeemableAmount);
-            remainingAmount -= redeemableAmount;
+                : providerOfferAmount;
+
+            if (
+                isRedemptionProvider(provider) &&
+                _calculateCollateralRatio(
+                    userPositions[provider].collateral,
+                    etherPrice,
+                    userPositions[provider].debt
+                ) >
+                (100 * 1e18)
+            ) {
+                uint256 etherRedeemed = _processRedemption(
+                    provider,
+                    redeemableAmount,
+                    etherPrice,
+                    0 // No per-provider slippage check in batch mode
+                );
+
+                remainingAmount -= redeemableAmount;
+                totalEtherRedeemed += etherRedeemed;
+            }
         }
+
+        // Batch slippage check
+        if (totalEtherRedeemed < minEtherAmount)
+            revert AnchorEngine__SlippageExceeded();
+
+        if (totalEtherRedeemed > 0) {
+            stETH.transfer(msg.sender, totalEtherRedeemed);
+        }
+
+        emit BatchRedeemedCollateral(
+            msg.sender,
+            amount - remainingAmount,
+            totalEtherRedeemed,
+            block.timestamp
+        );
     }
 
-    /**
-     * @dev  Refresh Anchor generated service fee before adding totalAnchorUSDCirculation. Check providers collateralRatio cannot below `safeCollateralRatio`after minting.
-     */
     function _mintAnchorUSD(
         address _provider,
         address _onBehalfOf,
@@ -750,7 +822,6 @@ contract AnchorEngine is Governable {
 
         anchorUSD.mint(_onBehalfOf, _amount);
 
-        _saveReport();
         totalAnchorUSDCirculation += _amount;
         _checkHealth(_provider);
 
@@ -760,7 +831,6 @@ contract AnchorEngine is Governable {
     /**
      * @notice Burn _provideramount anchorUSD to payback minted anchorUSD for _onBehalfOf.
      *
-     * @dev  Refresh Anchor generated service fee before reducing totalAnchorUSDCirculation.
      */
     function _repay(
         address _provider,
@@ -777,19 +847,13 @@ contract AnchorEngine is Governable {
 
         if (
             isRedemptionProvider(_onBehalfOf) &&
-            redemptionOffers[_onBehalfOf].amount <
-            userPositions[_onBehalfOf].debt
+            userPositions[_onBehalfOf].debt <
+            redemptionOffers[_onBehalfOf].amount
         ) revert AnchorEngine__RepaymentExceedsRedemptionCommitment();
 
-        _saveReport();
         totalAnchorUSDCirculation -= _amount;
 
         emit Burn(_provider, _onBehalfOf, _amount, block.timestamp);
-    }
-
-    function _saveReport() internal {
-        feeStored += _newFee();
-        lastReportTime = block.timestamp;
     }
 
     function _calculateCollateralRatio(
@@ -809,21 +873,12 @@ contract AnchorEngine is Governable {
                 userPositions[user].collateral,
                 fetchEthPriceInUsd(),
                 userPositions[user].debt
-            ) < safeCollateralRatio
-        ) revert("collateralRatio is Below safeCollateralRatio");
+            ) < minCollateralRatio
+        ) revert("collateralRatio is Below minCollateralRatio");
     }
 
     function fetchEthPriceInUsd() public view returns (uint256) {
         (, int256 answer, , , ) = priceFeed.latestRoundData();
         return uint(answer) * 10 ** (18 - priceFeed.decimals());
-    }
-
-    function _newFee() internal view returns (uint256) {
-        return
-            (totalAnchorUSDCirculation *
-                mintFeeApy *
-                (block.timestamp - lastReportTime)) /
-            year /
-            10000;
     }
 }
