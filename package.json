@@ -1,0 +1,11 @@
+{
+  "name": "contracts",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "git@github.com:A-Mannan/anchor-stablecoin-contracts.git",
+  "author": "Abdul Mannan <a.mannan.shk@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "ethers": "^6.13.4"
+  }
+}

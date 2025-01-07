@@ -29,7 +29,8 @@ snapshot :; forge snapshot
 
 format :; forge fmt
 
-anvil :; anvil --accounts 15 --timestamp 300000 --host 0.0.0.0
+anvil :; anvil --accounts 15 --timestamp 300000 --host 0.0.0.0 --block-time 1
+anvil2:; anvil --accounts 15 --timestamp 300000 --host 0.0.0.0
 
 NETWORK_ARGS := --rpc-url http://localhost:8545 --private-key $(DEFAULT_ANVIL_KEY) --broadcast
 
@@ -55,3 +56,14 @@ deposit-n-mint-multiple-users:
 
 register-providers:
 	@forge script script/RegisterRedemptionProviders.s.sol $(NETWORK_ARGS)
+accumulate-rewards:
+	@forge script script/AccumulateStETHRewards.s.sol $(NETWORK_ARGS)
+read:
+	@forge script script/ReadAnchorEngine.s.sol $(NETWORK_ARGS)
+harvest:
+	@forge script script/HarvestYield.s.sol $(NETWORK_ARGS)
+register-provider:
+	@forge script script/RegisterProvider.s.sol $(NETWORK_ARGS)
+
+setup: deploy-anchor deposit-n-mint-multiple-users register-providers
+

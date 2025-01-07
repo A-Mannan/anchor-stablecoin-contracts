@@ -47,7 +47,7 @@ contract AnchorEngineYieldRedistributionTest is AnchorTestFixture {
 
     modifier WhenStETHRebasesRewards() {
         // vm.deal(address(stEth), 10 ether);
-        vm.prank(stEth.owner());
+        // vm.prank(stEth.owner());
         stEth.accumulateRewards(10 ether);
         _;
     }
@@ -83,7 +83,7 @@ contract AnchorEngineYieldRedistributionTest is AnchorTestFixture {
         vm.startPrank(buyer);
 
         anchorUSD.approve(address(anchorEngine), auctionPaymentAmount);
-        anchorEngine.harvestAndAuctionYield(auctionYieldAmount);
+        anchorEngine.harvestYieldAndAuction(auctionYieldAmount);
 
         vm.stopPrank();
 

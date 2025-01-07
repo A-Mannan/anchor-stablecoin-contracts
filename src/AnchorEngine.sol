@@ -300,7 +300,7 @@ contract AnchorEngine is Governable {
     function becomeRedemptionProvider(
         uint256 _feeRate,
         uint256 _amount
-    ) external nonZeroAmount(_amount) {
+    ) external nonZeroAmount(_amount) nonZeroAmount(_feeRate) {
         if (_feeRate > MAX_REDEMPTION_FEE_RATE) {
             revert AnchorEngine__MaxRedemptionFeeExceeded();
         }
@@ -587,14 +587,14 @@ contract AnchorEngine is Governable {
         );
     }
 
-    function getYieldToHarvest() public view returns (uint256) {
+    function getHarvestableYield() public view returns (uint256) {
         return stETH.balanceOf(address(this)) - totalDepositedEther;
     }
 
     // Function for auctioning excess yield with fee deduction
-    function harvestAndAuctionYield(uint256 stETHAmount) external {
+    function harvestYieldAndAuction(uint256 stETHAmount) external {
         // Calculate the excess stETH in the contract
-        uint256 excessStETH = getYieldToHarvest();
+        uint256 excessStETH = getHarvestableYield();
 
         // Validate input and state
         if (excessStETH == 0 || stETHAmount == 0) {
@@ -654,9 +654,13 @@ contract AnchorEngine is Governable {
      * The specific rule is that the discount rate increases by 1% every 30 minutes after the rebase occurs.
      */
     function getDutchAuctionDiscountPrice() public view returns (uint256) {
-        uint256 time = (block.timestamp - lidoRebaseTime) % 1 days;
-        if (time < 30 minutes) return 10_000;
-        return 10_000 - (time / 30 minutes - 1) * 100;
+        uint256 time = getTimePassedSinceRebase();
+        // if (time < 30 minutes) return 10_000;
+        return 10_000 - (time / 30 minutes) * 100;
+    }
+
+    function getTimePassedSinceRebase() public view returns (uint256) {
+        return (block.timestamp - lidoRebaseTime) % 1 days;
     }
 
     /**
