@@ -148,7 +148,7 @@ contract AnchorEngineLiquidationsTest is AnchorTestFixture {
 
         // Act
         vm.prank(keepers);
-        anchorEngine.liquidatePosition(liquidator, user, DEBT_TO_OFFSET);
+        anchorEngine.liquidatePosition(liquidator, user, DEBT_TO_OFFSET, 0);
 
         // Assert
         (

@@ -65,5 +65,8 @@ harvest:
 register-provider:
 	@forge script script/RegisterProvider.s.sol $(NETWORK_ARGS)
 
+liquidate:
+	@forge script script/LiquidatePosition.s.sol $(NETWORK_ARGS)
+
 setup: deploy-anchor deposit-n-mint-multiple-users register-providers
 

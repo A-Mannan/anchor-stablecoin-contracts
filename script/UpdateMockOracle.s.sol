@@ -10,7 +10,7 @@ import "forge-std/console.sol";
 
 contract DeployMocks is Script {
     uint8 public constant DECIMALS = 8;
-    int256 public constant NEW_ANSWER = 3000e8;
+    int256 public constant NEW_ANSWER = 1500e8;
 
     address public constant MOCK_ETH_USD_PRICE_FEED = 0x5FbDB2315678afecb367f032d93F642f64180aa3;
 

@@ -518,7 +518,8 @@ contract AnchorEngine is Governable {
     function liquidatePosition(
         address provider,
         address onBehalfOf,
-        uint256 debtToOffset
+        uint256 debtToOffset,
+        uint256 minEthOut
     ) external {
         uint256 etherPrice = fetchEthPriceInUsd();
 
@@ -550,6 +551,10 @@ contract AnchorEngine is Governable {
 
         if (anchorUSD.allowance(provider, address(this)) < anchorUSDAmount) {
             revert AnchorEngine__InsufficientAllowance();
+        }
+
+        if (etherAmount < minEthOut) {
+            revert AnchorEngine__SlippageExceeded();
         }
 
         // Repay the specified debt amount using AnchorUSD
